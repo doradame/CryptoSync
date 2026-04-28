@@ -19,6 +19,11 @@ S3-compatible bucket, using:
   recovery email via [Resend](https://resend.com), and safe handling of cron /
   Task Scheduler runs.
 
+> 📖 **Read the full story on the blog:**
+> [cryptoSync — a zero-knowledge multi-device backup with Wasabi, Cryptomator and rclone](https://mojalab.com/cryptosync-a-zero-knowledge-multi-device-backup-with-wasabi-cryptomator-and-rclone/)
+> — the long-form write-up on [MojaLab](https://mojalab.com) with the why,
+> the how, and a few war stories from running this in production.
+
 ### What you'll end up with
 
 By the end of this guide you will have:
