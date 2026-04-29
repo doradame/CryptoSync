@@ -7,18 +7,21 @@
 # =============================================================================
 
 # --- AUTO-DETECT OS, MACHINE NAME AND PATH ---
-OS_TYPE=$(uname)
-HOST_NAME=$(hostname)
-export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+# Put system paths FIRST so we never accidentally pick up a broken Homebrew /
+# coreutils replacement of basic tools (which on recent macOS gets SIGKILL'd
+# by AMFI when the signature is invalid → "Killed: 9").
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin"
+OS_TYPE=$(/usr/bin/uname)
+HOST_NAME=$(/bin/hostname)
 
 if [ "$OS_TYPE" = "Darwin" ]; then
     RCLONE_CMD="/opt/homebrew/bin/rclone"
     PING_CMD=(/sbin/ping -c 1 -t 2)
-    STAT_MTIME="stat -f %m"
+    STAT_MTIME="/usr/bin/stat -f %m"
 else
     RCLONE_CMD="/usr/bin/rclone"
-    PING_CMD=(ping -c 1 -W 2)
-    STAT_MTIME="stat -c %Y"
+    PING_CMD=(/bin/ping -c 1 -W 2)
+    STAT_MTIME="/usr/bin/stat -c %Y"
 fi
 
 # --- WORKING DIRECTORY ---
@@ -40,7 +43,7 @@ WORK_DIR="${RCLONE_SYNC_DIR:-$HOME}"
 
 # Create the directory only if it does not exist
 if [ ! -d "$WORK_DIR" ]; then
-    mkdir -p "$WORK_DIR" 2>/dev/null || {
+    /bin/mkdir -p "$WORK_DIR" 2>/dev/null || {
         echo "ERROR: cannot create working directory $WORK_DIR" >&2
         exit 1
     }
@@ -77,7 +80,7 @@ LOCK_MAX_AGE=14400
 
 log() {
     if [ "$DEBUG" -eq 1 ]; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$HOST_NAME|$OS_TYPE] $1" >> "$LOGFILE"
+        echo "[$(/bin/date '+%Y-%m-%d %H:%M:%S')] [$HOST_NAME|$OS_TYPE] $1" >> "$LOGFILE"
     fi
 }
 
@@ -90,13 +93,13 @@ send_alert() {
     # Build JSON safely (avoids injection from quotes/newlines in the body)
     local PAYLOAD
     PAYLOAD=$(EMAIL_FROM="$EMAIL_FROM" EMAIL_TO="$EMAIL_TO" SUBJECT="$SUBJECT" BODY="$BODY" \
-        python3 -c 'import json,os; print(json.dumps({"from":os.environ["EMAIL_FROM"],"to":os.environ["EMAIL_TO"],"subject":os.environ["SUBJECT"],"html":os.environ["BODY"]}))' 2>/dev/null)
+        /usr/bin/python3 -c 'import json,os; print(json.dumps({"from":os.environ["EMAIL_FROM"],"to":os.environ["EMAIL_TO"],"subject":os.environ["SUBJECT"],"html":os.environ["BODY"]}))' 2>/dev/null)
     if [ -z "$PAYLOAD" ]; then
         log "WARNING: cannot build JSON payload (python3 not available?)"
         return 1
     fi
 
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    HTTP_CODE=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" \
         -X POST 'https://api.resend.com/emails' \
         -H "Authorization: Bearer $RESEND_API_KEY" \
         -H "Content-Type: application/json" \
@@ -136,7 +139,7 @@ increment_fail() {
         local SUBJECT="KO Wasabi alert on $HOST_NAME ($OS_TYPE)"
         local BODY="<p>Hi there,</p><p>Rclone has failed on <strong>$HOST_NAME</strong> ($OS_TYPE) <strong>$MAX_FAILS consecutive times</strong>.<br>Last error reason: <code>$REASON</code></p>"
         if send_alert "$REASON" "$SUBJECT" "$BODY"; then
-            touch "$ALERT_FLAG"
+            /usr/bin/touch "$ALERT_FLAG"
             log "Alert email sent — flag created (recovery email will fire on next successful sync)"
         else
             log "Alert email NOT delivered — will retry next cycle"
@@ -185,10 +188,10 @@ trap 'EXIT_CODE=$?; /bin/rm -f "$LOCKFILE"; if [ $EXIT_CODE -ne 0 ]; then increm
 # LOG ROTATION — if > 1MB keep last 1000 lines and save .old backup
 # =============================================================================
 if [ -f "$LOGFILE" ]; then
-    FILESIZE=$(stat -f "%z" "$LOGFILE" 2>/dev/null || stat -c "%s" "$LOGFILE" 2>/dev/null || echo 0)
+    FILESIZE=$(/usr/bin/stat -f "%z" "$LOGFILE" 2>/dev/null || /usr/bin/stat -c "%s" "$LOGFILE" 2>/dev/null || echo 0)
     if [ "$FILESIZE" -gt 1048576 ]; then
-        cp "$LOGFILE" "${LOGFILE}.old"
-        tail -n 1000 "$LOGFILE" > "${LOGFILE}.tmp" && mv "${LOGFILE}.tmp" "$LOGFILE"
+        /bin/cp "$LOGFILE" "${LOGFILE}.old"
+        /usr/bin/tail -n 1000 "$LOGFILE" > "${LOGFILE}.tmp" && /bin/mv "${LOGFILE}.tmp" "$LOGFILE"
         log "Log rotation performed (backup saved to ${LOGFILE}.old)"
     fi
 fi
@@ -203,14 +206,14 @@ log "rclone: $($RCLONE_CMD version 2>/dev/null | head -1)"
 
 # --- LOCKFILE WITH AGE CHECK ---
 if [ -f "$LOCKFILE" ]; then
-    PID=$(cat "$LOCKFILE")
+    PID=$(/bin/cat "$LOCKFILE")
     LOCK_MTIME=$($STAT_MTIME "$LOCKFILE" 2>/dev/null || echo 0)
-    LOCK_AGE=$(( $(date +%s) - LOCK_MTIME ))
+    LOCK_AGE=$(( $(/bin/date +%s) - LOCK_MTIME ))
     if kill -0 "$PID" 2>/dev/null; then
         if [ "$LOCK_AGE" -gt "$LOCK_MAX_AGE" ]; then
             log "WARNING: rclone (PID $PID) running for ${LOCK_AGE}s — likely stuck, forcing kill"
             kill "$PID" 2>/dev/null
-            sleep 2
+            /bin/sleep 2
             kill -9 "$PID" 2>/dev/null
             /bin/rm -f "$LOCKFILE"
             increment_fail "rclone stuck for ${LOCK_AGE}s — forced kill"
@@ -252,7 +255,7 @@ if [ ! -f "$BISYNC_MARKER" ]; then
     "$RCLONE_CMD" bisync "$LOCAL" "$REMOTE" --resync --log-level INFO >> "$LOGFILE" 2>&1
     RESYNC_EXIT=$?
     if [ $RESYNC_EXIT -eq 0 ]; then
-        touch "$BISYNC_MARKER"
+        /usr/bin/touch "$BISYNC_MARKER"
         log "Initial resync completed — marker created"
     else
         increment_fail "initial resync failed (exit code $RESYNC_EXIT)"
@@ -264,7 +267,7 @@ if [ ! -f "$BISYNC_MARKER" ]; then
 fi
 
 # --- RCLONE EXECUTION ---
-START_TIME=$(date +%s)
+START_TIME=$(/bin/date +%s)
 log "Starting rclone bisync..."
 RCLONE_ARGS=(bisync "$LOCAL" "$REMOTE" --contimeout 60s --timeout 5m)
 
@@ -275,7 +278,7 @@ else
 fi
 RCLONE_EXIT=$?
 
-END_TIME=$(date +%s)
+END_TIME=$(/bin/date +%s)
 DURATION=$(( END_TIME - START_TIME ))
 log "rclone exit code: $RCLONE_EXIT — duration: ${DURATION}s"
 
